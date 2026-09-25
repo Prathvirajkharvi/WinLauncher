@@ -26,7 +26,11 @@ class ProcessMonitor(
     private val _state = MutableStateFlow<ProcessState>(ProcessState.Running)
     val state: StateFlow<ProcessState> = _state
 
-    val pid: Long get() = process.pid()
+    // Process.pid() isn't resolvable through this Android-compatible abstraction
+    // in the current toolchain/compileSdk setup. PID is informational only for
+    // the MVP, so it's stubbed out here rather than blocking compilation --
+    // revisit with a proper API-level-gated implementation if PID is ever needed.
+    val pid: Long get() = -1L
 
     init {
         readStreamAsync(process.inputStream, "stdout")

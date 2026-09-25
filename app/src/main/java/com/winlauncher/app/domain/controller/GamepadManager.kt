@@ -32,9 +32,10 @@ class GamepadManager(private val inputManager: InputManager) : InputManager.Inpu
 
     private fun refresh() {
         val devices = inputManager.inputDeviceIds
-            .mapNotNull { inputManager.getInputDevice(it) }
-            .filter { InputMapper.isGamepadDevice(it) }
-            .map { it.toConnectedGamepad() }
+            .toList()
+            .mapNotNull { deviceId -> inputManager.getInputDevice(deviceId) }
+            .filter { device -> InputMapper.isGamepadDevice(device) }
+            .map { device -> device.toConnectedGamepad() }
         _gamepads.value = devices
     }
 

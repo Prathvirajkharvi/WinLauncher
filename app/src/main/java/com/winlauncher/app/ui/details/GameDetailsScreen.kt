@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+
 package com.winlauncher.app.ui.details
 
 import androidx.compose.foundation.layout.*
