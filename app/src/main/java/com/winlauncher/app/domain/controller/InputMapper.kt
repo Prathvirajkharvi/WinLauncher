@@ -13,12 +13,21 @@ import kotlinx.coroutines.flow.StateFlow
  * downstream consumers (InputBridge) never know or care where an input came
  * from.
  */
-class InputMapper(private val deadzone: Float = 0.15f) {
+class InputMapper(deadzone: Float = 0.15f) {
+
+    @Volatile private var deadzone: Float = deadzone
+    @Volatile private var sensitivity: Float = 1.0f
 
     private val _state = MutableStateFlow(XInputState())
     val state: StateFlow<XInputState> = _state
 
     fun currentState(): XInputState = _state.value
+
+    /** Applied live from the active ControllerProfile -- see ControllerViewModel. */
+    fun applyProfile(deadzone: Float, sensitivity: Float) {
+        this.deadzone = deadzone
+        this.sensitivity = sensitivity
+    }
 
     // --- Physical gamepad path -------------------------------------------------
 
@@ -35,13 +44,18 @@ class InputMapper(private val deadzone: Float = 0.15f) {
         val hatX = event.getAxisValue(MotionEvent.AXIS_HAT_X)
         val hatY = event.getAxisValue(MotionEvent.AXIS_HAT_Y)
 
-        _state.value = _state.value.copy(
+        val current = _state.value
+        val updated = current.copy(
             leftStickX = lx, leftStickY = ly,
             rightStickX = rx, rightStickY = ry,
             leftTrigger = lt, rightTrigger = rt,
             dpadLeft = hatX < -0.5f, dpadRight = hatX > 0.5f,
             dpadUp = hatY < -0.5f, dpadDown = hatY > 0.5f,
         )
+        // Android can deliver joystick MotionEvents at a very high rate; skip the
+        // StateFlow emission (and the Compose recomposition it triggers) when
+        // nothing actually changed, instead of allocating+publishing every time.
+        if (updated != current) _state.value = updated
         return true
     }
 
@@ -89,7 +103,7 @@ class InputMapper(private val deadzone: Float = 0.15f) {
 
     fun setButton(button: XInputButton, pressed: Boolean) {
         val s = _state.value
-        _state.value = when (button) {
+        val updated = when (button) {
             XInputButton.A -> s.copy(buttonA = pressed)
             XInputButton.B -> s.copy(buttonB = pressed)
             XInputButton.X -> s.copy(buttonX = pressed)
@@ -105,9 +119,14 @@ class InputMapper(private val deadzone: Float = 0.15f) {
             XInputButton.DPAD_LEFT -> s.copy(dpadLeft = pressed)
             XInputButton.DPAD_RIGHT -> s.copy(dpadRight = pressed)
         }
+        if (updated != s) _state.value = updated
     }
 
-    private fun applyDeadzone(value: Float): Float = if (abs(value) < deadzone) 0f else value
+    /** Deadzone cuts stick noise near center; sensitivity then scales the remaining range. */
+    private fun applyDeadzone(value: Float): Float {
+        if (abs(value) < deadzone) return 0f
+        return (value * sensitivity).coerceIn(-1f, 1f)
+    }
 
     companion object {
         fun isGamepadDevice(device: InputDevice?): Boolean {

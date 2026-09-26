@@ -32,6 +32,7 @@ fun LibraryScreen(
 ) {
     val viewModel: LibraryViewModel = viewModel(factory = factory)
     val games by viewModel.games.collectAsStateWithLifecycle()
+    val runtimeNames by viewModel.runtimeNames.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {
@@ -66,7 +67,12 @@ fun LibraryScreen(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     items(games, key = { it.id }) { game ->
-                        GameCard(game, onClick = { onOpenGame(game.id) }, onDelete = { viewModel.deleteGame(game) })
+                        GameCard(
+                            game,
+                            runtimeName = game.runtimeProfileId?.let { runtimeNames[it] },
+                            onClick = { onOpenGame(game.id) },
+                            onDelete = { viewModel.deleteGame(game) },
+                        )
                     }
                 }
             }
@@ -75,7 +81,7 @@ fun LibraryScreen(
 }
 
 @Composable
-private fun GameCard(game: GameProfile, onClick: () -> Unit, onDelete: () -> Unit) {
+private fun GameCard(game: GameProfile, runtimeName: String?, onClick: () -> Unit, onDelete: () -> Unit) {
     Card(onClick = onClick, modifier = Modifier.height(190.dp)) {
         Column(modifier = Modifier.padding(12.dp).fillMaxSize()) {
             Text(game.name, style = MaterialTheme.typography.titleSmall, maxLines = 2)
@@ -85,7 +91,7 @@ private fun GameCard(game: GameProfile, onClick: () -> Unit, onDelete: () -> Uni
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(
-                "Runtime: ${if (game.runtimeProfileId != null) "assigned" else "not set"}",
+                "Runtime: ${runtimeName ?: "not set"}",
                 style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.weight(1f))

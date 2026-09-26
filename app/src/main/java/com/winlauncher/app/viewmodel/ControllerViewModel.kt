@@ -8,6 +8,7 @@ import com.winlauncher.app.domain.controller.ConnectedGamepad
 import com.winlauncher.app.domain.controller.GamepadManager
 import com.winlauncher.app.domain.controller.InputMapper
 import com.winlauncher.app.domain.controller.XInputState
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -26,6 +27,9 @@ class ControllerViewModel(
 
     val liveState: StateFlow<XInputState> = inputMapper.state
 
+    private val _activeProfileId = MutableStateFlow<Long?>(null)
+    val activeProfileId: StateFlow<Long?> = _activeProfileId
+
     init {
         gamepadManager.start()
     }
@@ -36,10 +40,26 @@ class ControllerViewModel(
     }
 
     fun save(profile: ControllerProfile) {
-        viewModelScope.launch { controllerRepository.save(profile) }
+        viewModelScope.launch {
+            val savedId = controllerRepository.save(profile)
+            // A brand new profile (id was 0) becomes active immediately once it has
+            // a real id; an edited existing profile keeps its id unchanged.
+            val resolvedId = if (profile.id != 0L) profile.id else savedId
+            if (_activeProfileId.value == null) setActive(resolvedId, profile)
+        }
     }
 
     fun delete(profile: ControllerProfile) {
-        viewModelScope.launch { controllerRepository.delete(profile) }
+        viewModelScope.launch {
+            controllerRepository.delete(profile)
+            if (_activeProfileId.value == profile.id) _activeProfileId.value = null
+        }
+    }
+
+    /** Pushes this profile's deadzone/sensitivity into the shared InputMapper live. */
+    fun setActive(id: Long, profile: ControllerProfile) {
+        _activeProfileId.value = id
+        inputMapper.applyProfile(deadzone = profile.deadzone, sensitivity = profile.sensitivity)
     }
 }
+

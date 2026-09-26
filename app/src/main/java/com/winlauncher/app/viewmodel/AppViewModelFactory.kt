@@ -7,6 +7,7 @@ import androidx.lifecycle.viewmodel.CreationExtras
 import com.winlauncher.app.LauncherApplication
 import com.winlauncher.app.domain.controller.GamepadManager
 import com.winlauncher.app.domain.controller.InputMapper
+import com.winlauncher.app.domain.performance.PerformanceManager
 
 /**
  * One shared InputMapper for the whole app -- MainActivity forwards physical
@@ -22,10 +23,10 @@ class AppViewModelFactory(private val app: LauncherApplication) : ViewModelProvi
     override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T {
         @Suppress("UNCHECKED_CAST")
         return when (modelClass) {
-            LibraryViewModel::class.java -> LibraryViewModel(app.gameRepository) as T
+            LibraryViewModel::class.java -> LibraryViewModel(app.gameRepository, app.runtimeRepository) as T
             AddGameViewModel::class.java -> AddGameViewModel(app.gameRepository) as T
             GameDetailsViewModel::class.java -> GameDetailsViewModel(
-                app.gameRepository, app.runtimeRepository, app.runtimeEngine,
+                app.gameRepository, app.runtimeRepository, app.runtimeEngine, PerformanceManager(app),
             ) as T
             RuntimeViewModel::class.java -> RuntimeViewModel(app.runtimeRepository) as T
             ControllerViewModel::class.java -> {

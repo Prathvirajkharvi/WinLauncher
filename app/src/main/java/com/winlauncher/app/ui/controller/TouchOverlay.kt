@@ -15,6 +15,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.winlauncher.app.domain.controller.InputMapper
@@ -25,10 +26,13 @@ import kotlin.math.sqrt
  * All controls here call straight into InputMapper's virtual-touch setters --
  * the same instance GamepadManager feeds from physical input, so downstream
  * consumers see one unified stream (architecture doc section 9).
+ *
+ * @param opacity overall HUD transparency, sourced from the active
+ *   ControllerProfile.touchOpacity so it's configurable per-profile.
  */
 @Composable
-fun TouchOverlay(inputMapper: InputMapper, modifier: Modifier = Modifier) {
-    Box(modifier = modifier) {
+fun TouchOverlay(inputMapper: InputMapper, opacity: Float = 0.6f, modifier: Modifier = Modifier) {
+    Box(modifier = modifier.graphicsLayer(alpha = opacity.coerceIn(0.2f, 1f))) {
         VirtualStick(
             modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),
             onMove = { x, y -> inputMapper.setLeftStick(x, y) },
