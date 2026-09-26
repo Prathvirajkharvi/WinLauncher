@@ -12,7 +12,7 @@ import java.util.zip.ZipInputStream
  * name (SAF hands us a display name, not a content-type we can trust to sniff).
  */
 enum class ArchiveKind {
-    ZIP, TAR_GZ, TAR_ZST, UNKNOWN;
+    ZIP, TAR_GZ, TAR_ZST, WCP, UNKNOWN;
 
     companion object {
         fun fromFileName(name: String?): ArchiveKind {
@@ -21,6 +21,12 @@ enum class ArchiveKind {
                 n.endsWith(".zip") -> ZIP
                 n.endsWith(".tar.gz") || n.endsWith(".tgz") -> TAR_GZ
                 n.endsWith(".tar.zst") || n.endsWith(".tzst") -> TAR_ZST
+                // Winlator-style .wcp ("Wine/Winlator Component Package") -- a tar archive
+                // compressed with zstd under the hood (same layout as .tar.zst above), carrying
+                // an optional profile.json plus the actual runtime payload. See WineWcpValidator
+                // for the extra, more specific acceptance check imports of this format go
+                // through for the Wine slot.
+                n.endsWith(".wcp") -> WCP
                 else -> UNKNOWN
             }
         }
@@ -30,7 +36,7 @@ enum class ArchiveKind {
 /**
  * Extracts a runtime package archive into [targetDir] -- the staging directory
  * RuntimeInstallationManager validates before committing an import. Handles the
- * three formats official runtime projects actually ship, each decoded for real:
+ * formats official runtime projects actually ship, each decoded for real:
  *
  *  - .zip           -- java.util.zip (JDK built-in).
  *  - .tar.gz/.tgz    -- java.util.zip.GZIPInputStream (JDK built-in) unwraps the
@@ -38,7 +44,7 @@ enum class ArchiveKind {
  *                        (it correctly handles ustar/GNU/PAX long-name entries,
  *                        which real Wine/Box64 release tarballs can contain and a
  *                        hand-rolled 512-byte-header reader would likely mishandle).
- *  - .tar.zst        -- com.github.luben:zstd-jni's ZstdInputStream unwraps the zstd
+ *  - .tar.zst / .wcp -- com.github.luben:zstd-jni's ZstdInputStream unwraps the zstd
  *                        layer, same Commons Compress tar reader after that. Uses the
  *                        official "@aar" artifact (implementation("com.github.luben:
  *                        zstd-jni:<version>@aar")), NOT the plain jar: the plain jar
@@ -62,7 +68,9 @@ enum class ArchiveKind {
  *
  * Nothing here is ever relabeled as a different format than it is. Every entry name
  * is checked against a zip-slip/tar-slip path-traversal guard before anything is
- * written, regardless of format.
+ * written, regardless of format. A .wcp additionally goes through an extra,
+ * more specific acceptance check afterward when imported into the Wine slot --
+ * see WineWcpValidator.
  */
 object ArchiveExtractor {
 
@@ -73,6 +81,12 @@ object ArchiveExtractor {
             ArchiveKind.TAR_GZ ->
                 TarArchiveInputStream(GZIPInputStream(input)).use { extractTar(it, targetDir, names) }
             ArchiveKind.TAR_ZST ->
+                TarArchiveInputStream(com.github.luben.zstd.ZstdInputStream(input)).use {
+                    extractTar(it, targetDir, names)
+                }
+            // .wcp is tar+zstd under the hood, same as .tar.zst -- same decoder, same
+            // tar-slip guard, nothing relabeled as zip.
+            ArchiveKind.WCP ->
                 TarArchiveInputStream(com.github.luben.zstd.ZstdInputStream(input)).use {
                     extractTar(it, targetDir, names)
                 }

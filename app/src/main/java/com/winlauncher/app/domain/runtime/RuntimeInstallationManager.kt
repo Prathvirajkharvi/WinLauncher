@@ -31,9 +31,12 @@ import java.io.FileOutputStream
  * callers must pass replaceExisting = true, which is only reachable in the UI
  * after an explicit user confirmation.
  */
-class RuntimeInstallationManager(context: Context) {
+class RuntimeInstallationManager internal constructor(runtimeRootOverride: File) {
 
-    private val runtimeRoot: File = File(context.filesDir, "runtime").apply { mkdirs() }
+    /** Production entry point: the app-private runtime root lives under the app's filesDir. */
+    constructor(context: Context) : this(File(context.filesDir, "runtime"))
+
+    private val runtimeRoot: File = runtimeRootOverride.apply { mkdirs() }
     private val stagingRoot: File = File(runtimeRoot, ".staging").apply { mkdirs() }
 
     fun status(): RuntimeInstallationStatus {
@@ -118,12 +121,7 @@ class RuntimeInstallationManager(context: Context) {
         return try {
             val existing = componentStatus(component)
             if (existing.installed && !replaceExisting) {
-                return Result.failure(
-                    IllegalStateException(
-                        "${component.displayName} is already installed (version ${existing.version}). " +
-                            "Remove it or confirm replacement before importing another version.",
-                    ),
-                )
+                return Result.failure(alreadyInstalledError(component, existing))
             }
 
             staging.mkdirs()
@@ -135,9 +133,9 @@ class RuntimeInstallationManager(context: Context) {
             val archiveEntryNames = mutableListOf<String>()
             opened.use { input ->
                 if (archiveKind != ArchiveKind.UNKNOWN) {
-                    // .zip, .tar.gz/.tgz, and .tar.zst/.tzst are all extracted for real here --
-                    // never just relabeled as one another. See ArchiveExtractor's doc for why
-                    // each format needs its own decoder.
+                    // .zip, .tar.gz/.tgz, .tar.zst/.tzst, and .wcp are all extracted for real
+                    // here -- never just relabeled as one another. See ArchiveExtractor's doc
+                    // for why each format needs its own decoder.
                     try {
                         archiveEntryNames += ArchiveExtractor.extract(archiveKind, input, staging)
                     } catch (e: java.util.zip.ZipException) {
@@ -157,6 +155,52 @@ class RuntimeInstallationManager(context: Context) {
                     // imported (by mistake) under the Box64 slot would always look like a Box64
                     // match, since we'd only ever see the name we ourselves chose for it.
                     archiveEntryNames += (displayFileName ?: target.name)
+                }
+            }
+
+            commitStagedImport(component, staging, archiveEntryNames, archiveKind, versionLabel, replaceExisting)
+        } catch (e: Exception) {
+            staging.deleteRecursively()
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * The validate-then-commit half of [importComponent], split out so it can be exercised
+     * directly from a plain JVM unit test against a hand-built staging directory: everything
+     * above this point in [importComponent] exists only to get bytes from a SAF [Uri] onto disk
+     * via [ContentResolver], which is the one part that genuinely needs a real Android
+     * environment. [staging] must already contain the extracted (or copied) package contents.
+     *
+     * Never partially commits: on any rejection or error, [staging] is deleted and the real
+     * component directory -- and therefore [status]/[componentStatus] -- is left untouched, so a
+     * failed or rejected import is never reported as installed.
+     */
+    internal fun commitStagedImport(
+        component: RuntimeComponent,
+        staging: File,
+        archiveEntryNames: List<String>,
+        archiveKind: ArchiveKind,
+        versionLabel: String?,
+        replaceExisting: Boolean,
+    ): Result<RuntimeComponentStatus> {
+        return try {
+            val existing = componentStatus(component)
+            if (existing.installed && !replaceExisting) {
+                staging.deleteRecursively()
+                return Result.failure(alreadyInstalledError(component, existing))
+            }
+
+            // Winlator-style .wcp ("Wine/Winlator Component Package") imports into the Wine
+            // slot get an extra, more specific gate before the generic component-type guess/ELF
+            // scan below: a .wcp merely claiming Wine (via profile.json) or happening to contain
+            // *some* arm64 binary is not enough -- see WineWcpValidator's doc for why
+            // profile.json alone is never trusted either.
+            if (archiveKind == ArchiveKind.WCP && component == RuntimeComponent.WINE) {
+                val wcpError = WineWcpValidator.validate(staging)
+                if (wcpError != null) {
+                    staging.deleteRecursively()
+                    return Result.failure(IllegalStateException(wcpError))
                 }
             }
 
@@ -211,6 +255,12 @@ class RuntimeInstallationManager(context: Context) {
             Result.failure(e)
         }
     }
+
+    private fun alreadyInstalledError(component: RuntimeComponent, existing: RuntimeComponentStatus) =
+        IllegalStateException(
+            "${component.displayName} is already installed (version ${existing.version}). " +
+                "Remove it or confirm replacement before importing another version.",
+        )
 
     /**
      * Removes an installed component's files and version metadata. Safe in

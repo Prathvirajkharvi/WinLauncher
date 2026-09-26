@@ -68,8 +68,44 @@ class ArchiveExtractorTest {
         assertEquals(ArchiveKind.TAR_GZ, ArchiveKind.fromFileName("dxvk-2.4.tar.gz"))
         assertEquals(ArchiveKind.TAR_GZ, ArchiveKind.fromFileName("wine-9.0.tgz"))
         assertEquals(ArchiveKind.TAR_ZST, ArchiveKind.fromFileName("vkd3d-proton-2.13.tar.zst"))
+        assertEquals(ArchiveKind.WCP, ArchiveKind.fromFileName("wine-9.0-x86_64.wcp"))
+        assertEquals(ArchiveKind.WCP, ArchiveKind.fromFileName("WINE-9.0.WCP"))
         assertEquals(ArchiveKind.UNKNOWN, ArchiveKind.fromFileName("wine.exe"))
         assertEquals(ArchiveKind.UNKNOWN, ArchiveKind.fromFileName(null))
+    }
+
+    @Test
+    fun `wcp is extracted as tar+zstd, same decoder as tar zst`() {
+        val wcp = buildTarZst(
+            mapOf(
+                "profile.json" to """{"category":"wine","name":"Wine 9.0 arm64"}""".toByteArray(),
+                "bin/wine64" to "fake-wine-binary".toByteArray(),
+            ),
+        )
+        val target = tmp.newFolder("wcp-out")
+        val names = ArchiveExtractor.extract(ArchiveKind.WCP, wcp.inputStream(), target)
+
+        assertEquals(2, names.size)
+        assertTrue(File(target, "profile.json").isFile)
+        assertEquals("fake-wine-binary", File(target, "bin/wine64").readText())
+    }
+
+    @Test
+    fun `wcp entries are subject to the same tar-slip guard as tar zst`() {
+        val evilWcp = buildTarZst(mapOf("../../evil.so" to "x".toByteArray()))
+        val target = tmp.newFolder("wcp-slip-out")
+        assertThrows(SecurityException::class.java) {
+            ArchiveExtractor.extract(ArchiveKind.WCP, evilWcp.inputStream(), target)
+        }
+    }
+
+    @Test
+    fun `a corrupted wcp fails rather than silently importing nothing usable`() {
+        val garbage = "this is not a zstd-compressed tar at all".toByteArray()
+        val target = tmp.newFolder("wcp-corrupt-out")
+        assertThrows(Exception::class.java) {
+            ArchiveExtractor.extract(ArchiveKind.WCP, garbage.inputStream(), target)
+        }
     }
 
     @Test

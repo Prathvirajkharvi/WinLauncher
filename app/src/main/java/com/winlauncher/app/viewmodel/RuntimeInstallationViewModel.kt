@@ -33,14 +33,34 @@ class RuntimeInstallationViewModel(
         displayFileName: String?,
         versionLabel: String?,
         contentResolver: ContentResolver,
+        replaceExisting: Boolean = false,
     ) {
         viewModelScope.launch {
             _importError.value = null
             val result = withContext(Dispatchers.IO) {
-                installationManager.importComponent(component, uri, displayFileName, versionLabel, contentResolver)
+                installationManager.importComponent(
+                    component,
+                    uri,
+                    displayFileName,
+                    versionLabel,
+                    contentResolver,
+                    replaceExisting,
+                )
             }
             result.onSuccess { refresh() }
             result.onFailure { _importError.value = it.message ?: "Import failed" }
+        }
+    }
+
+    /** Deletes an installed component's files/version metadata and refreshes [status]. */
+    fun remove(component: RuntimeComponent) {
+        viewModelScope.launch {
+            _importError.value = null
+            val result = withContext(Dispatchers.IO) {
+                installationManager.removeComponent(component)
+            }
+            result.onSuccess { refresh() }
+            result.onFailure { _importError.value = it.message ?: "Remove failed" }
         }
     }
 }
