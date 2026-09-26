@@ -105,6 +105,15 @@ dependencies {
     // below (desktop-native plain jar, test-only, never packaged into the APK).
     implementation("com.github.luben:zstd-jni:1.5.5-4@aar")
     testImplementation("com.github.luben:zstd-jni:1.5.5-4")
+    // XZ decompression for .wcp packages that turn out to be XZ- rather than
+    // zstd-compressed (ArchiveExtractor detects which from the file's own magic
+    // bytes, never from the .wcp extension alone -- see its doc). Apache Commons
+    // Compress's XZCompressorInputStream needs this on the classpath at runtime
+    // (it's an optional/provided dependency of commons-compress itself); pure
+    // Java, no native/JNI component, so unlike zstd-jni there's no separate
+    // Android build or test-only artifact needed -- this one implementation()
+    // line covers the APK and JVM unit tests alike.
+    implementation("org.tukaani:xz:1.9")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

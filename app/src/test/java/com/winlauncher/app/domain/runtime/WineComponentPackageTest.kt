@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
+import org.apache.commons.compress.compressors.xz.XZCompressorOutputStream
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -23,9 +24,11 @@ import kotlin.io.path.createTempDirectory
  * install/replace behavior via [RuntimeInstallationManager.commitStagedImport] (the
  * Android-Context-free half of importComponent -- see its doc).
  *
- * Real Winlator .wcp files are tar archives compressed with zstd (same layout as
- * .tar.zst -- see ArchiveExtractor), so [extractWcp] below builds real tar+zstd
- * bytes, not a zip, to match.
+ * Real Winlator .wcp files have shipped as both zstd- and XZ-compressed tars --
+ * ArchiveExtractor detects which from the file's own magic bytes (see its
+ * extractWcp doc), never from the .wcp extension. [extractWcp] below defaults to
+ * building zstd bytes; [extractXzWcp] builds real XZ bytes for the tests that
+ * specifically need to confirm the XZ path works end-to-end too.
  */
 class WineComponentPackageTest {
 
@@ -51,9 +54,9 @@ class WineComponentPackageTest {
         return file
     }
 
-    private fun buildTarZst(entries: Map<String, ByteArray>): ByteArray {
-        val tarBytes = ByteArrayOutputStream()
-        TarArchiveOutputStream(tarBytes).use { tar ->
+    private fun buildTar(entries: Map<String, ByteArray>): ByteArray {
+        val bytes = ByteArrayOutputStream()
+        TarArchiveOutputStream(bytes).use { tar ->
             entries.forEach { (name, content) ->
                 val entry = TarArchiveEntry(name)
                 entry.size = content.size.toLong()
@@ -63,13 +66,32 @@ class WineComponentPackageTest {
             }
             tar.finish()
         }
+        return bytes.toByteArray()
+    }
+
+    private fun buildTarZst(entries: Map<String, ByteArray>): ByteArray {
+        val tarBytes = buildTar(entries)
         val zst = ByteArrayOutputStream()
-        ZstdOutputStream(zst).use { it.write(tarBytes.toByteArray()) }
+        ZstdOutputStream(zst).use { it.write(tarBytes) }
         return zst.toByteArray()
     }
 
+    private fun buildTarXz(entries: Map<String, ByteArray>): ByteArray {
+        val tarBytes = buildTar(entries)
+        val xz = ByteArrayOutputStream()
+        XZCompressorOutputStream(xz).use { it.write(tarBytes) }
+        return xz.toByteArray()
+    }
+
+    /** Default WCP test data: zstd-compressed, matching real Winlator packages seen so far. */
     private fun extractWcp(entries: Map<String, ByteArray>, into: File) {
         val wcp = buildTarZst(entries)
+        ArchiveExtractor.extract(ArchiveKind.WCP, wcp.inputStream(), into)
+    }
+
+    /** XZ-compressed variant, for tests confirming that codec works end-to-end too. */
+    private fun extractXzWcp(entries: Map<String, ByteArray>, into: File) {
+        val wcp = buildTarXz(entries)
         ArchiveExtractor.extract(ArchiveKind.WCP, wcp.inputStream(), into)
     }
 
@@ -82,6 +104,25 @@ class WineComponentPackageTest {
             mapOf(
                 "profile.json" to """{"category":"wine","name":"Wine 9.0 arm64"}""".toByteArray(),
                 "wine-9.0/bin/wine64" to elfBytes(183), // EM_AARCH64
+            ),
+            dir,
+        )
+
+        assertNull(WineWcpValidator.validate(dir))
+        assertEquals(1, WineWcpValidator.locateWineBinaries(dir).size)
+    }
+
+    @Test
+    fun `valid wine wcp compressed with xz instead of zstd is accepted the same way`() {
+        // Real Winlator .wcp packages (e.g. wine-10.0-rc2-phat.wcp) have shipped XZ-compressed
+        // rather than zstd-compressed -- extraction must detect that from magic bytes (see
+        // ArchiveExtractor.extractWcp), and everything downstream of extraction (this
+        // validator) must not care which codec was actually used.
+        val dir = tmp.newFolder("valid-wine-wcp-xz")
+        extractXzWcp(
+            mapOf(
+                "profile.json" to """{"category":"wine","name":"Wine 10.0-rc2 arm64"}""".toByteArray(),
+                "wine-10.0-rc2/bin/wine64" to elfBytes(183),
             ),
             dir,
         )

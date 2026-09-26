@@ -3,6 +3,7 @@ package com.winlauncher.app.domain.runtime
 import com.github.luben.zstd.ZstdOutputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
+import org.apache.commons.compress.compressors.xz.XZCompressorOutputStream
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -61,6 +62,14 @@ class ArchiveExtractorTest {
         return zst.toByteArray()
     }
 
+    /** Real XZ-compressed tar bytes -- exercises the actual org.tukaani:xz codec, not a stub. */
+    private fun buildTarXz(entries: Map<String, ByteArray>): ByteArray {
+        val tarBytes = buildTar(entries)
+        val xz = ByteArrayOutputStream()
+        XZCompressorOutputStream(xz).use { it.write(tarBytes) }
+        return xz.toByteArray()
+    }
+
     @Test
     fun `archive kind is detected from file name, case-insensitively`() {
         assertEquals(ArchiveKind.ZIP, ArchiveKind.fromFileName("box64-v1.zip"))
@@ -75,14 +84,14 @@ class ArchiveExtractorTest {
     }
 
     @Test
-    fun `wcp is extracted as tar+zstd, same decoder as tar zst`() {
+    fun `zstd-compressed wcp is detected from its magic bytes and extracted`() {
         val wcp = buildTarZst(
             mapOf(
                 "profile.json" to """{"category":"wine","name":"Wine 9.0 arm64"}""".toByteArray(),
                 "bin/wine64" to "fake-wine-binary".toByteArray(),
             ),
         )
-        val target = tmp.newFolder("wcp-out")
+        val target = tmp.newFolder("wcp-zstd-out")
         val names = ArchiveExtractor.extract(ArchiveKind.WCP, wcp.inputStream(), target)
 
         assertEquals(2, names.size)
@@ -91,21 +100,55 @@ class ArchiveExtractorTest {
     }
 
     @Test
-    fun `wcp entries are subject to the same tar-slip guard as tar zst`() {
-        val evilWcp = buildTarZst(mapOf("../../evil.so" to "x".toByteArray()))
-        val target = tmp.newFolder("wcp-slip-out")
+    fun `xz-compressed wcp is detected from its magic bytes and extracted, not assumed to be zstd`() {
+        val wcp = buildTarXz(
+            mapOf(
+                "profile.json" to """{"category":"wine","name":"Wine 10.0-rc2 arm64"}""".toByteArray(),
+                "bin/wine64" to "fake-wine-binary-xz".toByteArray(),
+            ),
+        )
+        val target = tmp.newFolder("wcp-xz-out")
+        val names = ArchiveExtractor.extract(ArchiveKind.WCP, wcp.inputStream(), target)
+
+        assertEquals(2, names.size)
+        assertTrue(File(target, "profile.json").isFile)
+        assertEquals("fake-wine-binary-xz", File(target, "bin/wine64").readText())
+    }
+
+    @Test
+    fun `wcp entries are subject to the same tar-slip guard regardless of which codec was detected`() {
+        val evilZstdWcp = buildTarZst(mapOf("../../evil.so" to "x".toByteArray()))
         assertThrows(SecurityException::class.java) {
-            ArchiveExtractor.extract(ArchiveKind.WCP, evilWcp.inputStream(), target)
+            ArchiveExtractor.extract(ArchiveKind.WCP, evilZstdWcp.inputStream(), tmp.newFolder("wcp-slip-zstd"))
+        }
+
+        val evilXzWcp = buildTarXz(mapOf("../../evil.so" to "x".toByteArray()))
+        assertThrows(SecurityException::class.java) {
+            ArchiveExtractor.extract(ArchiveKind.WCP, evilXzWcp.inputStream(), tmp.newFolder("wcp-slip-xz"))
         }
     }
 
     @Test
-    fun `a corrupted wcp fails rather than silently importing nothing usable`() {
-        val garbage = "this is not a zstd-compressed tar at all".toByteArray()
-        val target = tmp.newFolder("wcp-corrupt-out")
-        assertThrows(Exception::class.java) {
+    fun `a wcp whose magic bytes match neither zstd nor xz is rejected with a specific, non-confusing error`() {
+        val garbage = "this is plain text, not zstd or xz at all".toByteArray()
+        val target = tmp.newFolder("wcp-unsupported-out")
+        val error = assertThrows(IllegalStateException::class.java) {
             ArchiveExtractor.extract(ArchiveKind.WCP, garbage.inputStream(), target)
         }
+        assertEquals("Invalid WCP: unsupported compression format", error.message)
+    }
+
+    @Test
+    fun `a wcp with valid zstd magic bytes but a corrupted frame is rejected with a clear error`() {
+        // Real zstd magic (28 B5 2F FD) followed by garbage the decoder can't actually parse --
+        // this is what used to surface as the confusing raw "Unknown frame descriptor".
+        val fakeHeader = byteArrayOf(0x28, 0xB5.toByte(), 0x2F, 0xFD.toByte())
+        val corrupted = fakeHeader + "not actually valid zstd frame data".toByteArray()
+        val target = tmp.newFolder("wcp-corrupt-zstd-out")
+        val error = assertThrows(IllegalStateException::class.java) {
+            ArchiveExtractor.extract(ArchiveKind.WCP, corrupted.inputStream(), target)
+        }
+        assertEquals("Invalid WCP: corrupted compressed stream", error.message)
     }
 
     @Test
