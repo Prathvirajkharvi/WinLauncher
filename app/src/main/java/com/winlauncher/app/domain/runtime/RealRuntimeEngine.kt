@@ -45,7 +45,8 @@ class RealRuntimeEngine(
 
     override suspend fun initialize(runtimeProfile: RuntimeProfile): ValidationResult {
         val installStatus = installationManager.status()
-        if (!installStatus.readyForLaunch) {
+        val backend = CpuBackend.valueOf(runtimeProfile.cpuBackend)
+        if (!LaunchPreflight.isLaunchable(installStatus, backend)) {
             return ValidationResult(false, AppError.RuntimeBinariesMissing.userMessage)
         }
 
