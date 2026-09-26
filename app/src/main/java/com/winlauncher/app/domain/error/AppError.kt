@@ -22,6 +22,9 @@ sealed class AppError(val userMessage: String) {
     object MissingRuntime :
         AppError("This game has no runtime profile assigned. Create or select one first.")
 
+    object RuntimeBinariesMissing :
+        AppError("Wine runtime is not installed. Install/download a compatible runtime first.")
+
     data class PermissionDenied(val detail: String) :
         AppError("Permission denied: $detail")
 

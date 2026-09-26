@@ -68,7 +68,7 @@ fun AppNavHost(app: LauncherApplication, navController: NavHostController = reme
             ControllerManagerScreen(factory = factory)
         }
         composable(Routes.SETTINGS) {
-            SettingsScreen()
+            SettingsScreen(app = app)
         }
     }
 }

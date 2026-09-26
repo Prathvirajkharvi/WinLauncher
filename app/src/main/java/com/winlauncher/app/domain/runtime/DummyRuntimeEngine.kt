@@ -18,7 +18,7 @@ import java.io.File
  * from the real runtime's requirements -- everything else (GameManager,
  * RuntimeManager UI, ProcessMonitor, logs screen) stays unchanged.
  */
-class DummyRuntimeEngine(private val filesDir: File) : RuntimeEngine {
+class DummyRuntimeEngine(private val filesDir: File) : RuntimeEngine, LogSource {
 
     private val launcher = ProcessLauncher()
     private var monitor: ProcessMonitor? = null
@@ -76,7 +76,7 @@ class DummyRuntimeEngine(private val filesDir: File) : RuntimeEngine {
         }
     }
 
-    fun currentLogs(): List<String> = monitor?.logBuffer?.snapshot() ?: emptyList()
+    override fun currentLogs(): List<String> = monitor?.logBuffer?.snapshot() ?: emptyList()
 
     private fun parseEnv(raw: String): Map<String, String> {
         return raw.lineSequence()

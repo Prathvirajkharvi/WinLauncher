@@ -29,6 +29,8 @@ class AppViewModelFactory(private val app: LauncherApplication) : ViewModelProvi
                 app.gameRepository, app.runtimeRepository, app.runtimeEngine, PerformanceManager(app),
             ) as T
             RuntimeViewModel::class.java -> RuntimeViewModel(app.runtimeRepository) as T
+            RuntimeInstallationViewModel::class.java ->
+                RuntimeInstallationViewModel(app.runtimeInstallationManager) as T
             ControllerViewModel::class.java -> {
                 val inputManager = app.getSystemService(InputManager::class.java)
                 ControllerViewModel(

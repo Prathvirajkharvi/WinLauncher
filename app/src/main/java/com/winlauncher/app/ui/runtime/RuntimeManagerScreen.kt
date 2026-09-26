@@ -2,18 +2,26 @@
 
 package com.winlauncher.app.ui.runtime
 
+import android.provider.OpenableColumns
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.winlauncher.app.data.db.entity.CpuBackend
 import com.winlauncher.app.data.db.entity.RuntimeProfile
+import com.winlauncher.app.domain.runtime.RuntimeComponent
+import com.winlauncher.app.domain.runtime.RuntimeComponentStatus
 import com.winlauncher.app.viewmodel.AppViewModelFactory
+import com.winlauncher.app.viewmodel.RuntimeInstallationViewModel
 import com.winlauncher.app.viewmodel.RuntimeViewModel
 
 @Composable
@@ -21,7 +29,28 @@ fun RuntimeManagerScreen(factory: AppViewModelFactory) {
     val viewModel: RuntimeViewModel = viewModel(factory = factory)
     val profiles by viewModel.profiles.collectAsStateWithLifecycle()
 
+    val installViewModel: RuntimeInstallationViewModel = viewModel(factory = factory)
+    val installStatus by installViewModel.status.collectAsStateWithLifecycle()
+    val importError by installViewModel.importError.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
     var showCreate by remember { mutableStateOf(false) }
+    var pendingImportComponent by remember { mutableStateOf<RuntimeComponent?>(null) }
+
+    val pickImportFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val component = pendingImportComponent
+        pendingImportComponent = null
+        if (uri != null && component != null) {
+            val displayName = queryDisplayName(context, uri)
+            installViewModel.import(
+                component = component,
+                uri = uri,
+                displayFileName = displayName,
+                versionLabel = null,
+                contentResolver = context.contentResolver,
+            )
+        }
+    }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Runtime Manager") }) },
@@ -30,6 +59,42 @@ fun RuntimeManagerScreen(factory: AppViewModelFactory) {
         },
     ) { padding ->
         LazyColumn(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+            item {
+                Text("Installed components", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Runtime directory: ${installStatus.runtimeRootPath}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                if (!installStatus.readyForLaunch) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Wine and Box64 are required before a real launch will work.",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                importError?.let {
+                    Spacer(Modifier.height(4.dp))
+                    Text("Import failed: $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+            items(installStatus.components, key = { it.component.name }) { status ->
+                ComponentRow(
+                    status = status,
+                    onImport = {
+                        pendingImportComponent = status.component
+                        pickImportFile.launch(arrayOf("*/*"))
+                    },
+                )
+                Spacer(Modifier.height(4.dp))
+            }
+
+            item {
+                Spacer(Modifier.height(20.dp))
+                Text("Runtime profiles", style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(8.dp))
+            }
             items(profiles, key = { it.id }) { profile ->
                 RuntimeCard(
                     profile,
@@ -49,6 +114,36 @@ fun RuntimeManagerScreen(factory: AppViewModelFactory) {
                 showCreate = false
             },
         )
+    }
+}
+
+private fun queryDisplayName(context: android.content.Context, uri: android.net.Uri): String? {
+    return try {
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        }
+    } catch (e: Exception) {
+        null
+    }
+}
+
+@Composable
+private fun ComponentRow(status: RuntimeComponentStatus, onImport: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.padding(12.dp).fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(status.component.displayName, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    if (status.installed) "Installed \u00b7 ${status.version}" else "Not installed",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (status.installed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                )
+            }
+            TextButton(onClick = onImport) { Text(if (status.installed) "Replace" else "Import") }
+        }
     }
 }
 
@@ -98,3 +193,4 @@ private fun CreateRuntimeDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
+

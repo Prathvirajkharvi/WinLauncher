@@ -15,7 +15,7 @@ import com.winlauncher.app.domain.graphics.GraphicsResolution
 import com.winlauncher.app.domain.performance.FpsCounter
 import com.winlauncher.app.domain.performance.PerformanceManager
 import com.winlauncher.app.domain.performance.PerformanceSnapshot
-import com.winlauncher.app.domain.runtime.DummyRuntimeEngine
+import com.winlauncher.app.domain.runtime.LogSource
 import com.winlauncher.app.domain.runtime.RuntimeEngine
 import com.winlauncher.app.domain.runtime.RuntimeStatus
 import kotlinx.coroutines.delay
@@ -134,7 +134,7 @@ class GameDetailsViewModel(
         viewModelScope.launch {
             while (true) {
                 _runtimeStatus.value = runtimeEngine.getStatus()
-                if (runtimeEngine is DummyRuntimeEngine) {
+                if (runtimeEngine is LogSource) {
                     _logs.value = runtimeEngine.currentLogs()
                 }
                 if (_runtimeStatus.value is RuntimeStatus.Stopped || _runtimeStatus.value is RuntimeStatus.Failed) {

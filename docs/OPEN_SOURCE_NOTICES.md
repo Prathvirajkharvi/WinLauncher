@@ -1,9 +1,14 @@
 # Open Source Notices
 
-This MVP itself has no bundled third-party runtime binaries yet (no Wine, Box64,
-DXVK or VKD3D are integrated in this codebase). This file is the placeholder
-that MUST be kept accurate once those are added -- regenerate it from the
-pinned dependency set at integration time, don't hand-maintain it.
+This MVP's own code contains no bundled third-party runtime binaries. It does
+now contain a real *import mechanism* (`RuntimeInstallationManager`) that lets
+a user supply their own Wine/Box64/Box86/DXVK/VKD3D packages at runtime via
+SAF -- those files live in the app's private storage after import, are never
+shipped in the APK, and remain the user's own responsibility to have obtained
+legally. This file is the placeholder that MUST be kept accurate if any of
+these components are ever bundled directly in the APK (e.g. via `jniLibs` at
+build time) -- regenerate it from the pinned dependency set at that point,
+don't hand-maintain it.
 
 | Component | License | Redistribute? | Modify? | Source-disclosure obligation |
 |---|---|---|---|---|
