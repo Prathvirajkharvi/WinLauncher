@@ -93,6 +93,19 @@ dependencies {
     // JSON parsing for the native GPU-detection bridge payload
     implementation("org.json:json:20240303")
 
+    // TAR reading for imported .tar.gz/.tar.zst runtime packages (DXVK, VKD3D-Proton,
+    // and any Wine/Box64/Box86 build distributed as a tarball instead of a .zip).
+    // Pure Java, no native/JNI component -- see ArchiveExtractor's doc.
+    implementation("org.apache.commons:commons-compress:1.26.2")
+    // Zstandard decompression for .tar.zst (VKD3D-Proton's official release format).
+    // "@aar" = zstd-jni's own officially published Android build (arm64-v8a and other
+    // Android ABIs, Android 5.0+) -- NOT the plain jar, which bundles glibc-Linux/macOS/
+    // Windows native binaries that do not load under Android's Bionic libc. See
+    // ArchiveExtractor's doc for the full reasoning and the matching testImplementation
+    // below (desktop-native plain jar, test-only, never packaged into the APK).
+    implementation("com.github.luben:zstd-jni:1.5.6-3@aar")
+    testImplementation("com.github.luben:zstd-jni:1.5.6-3")
+
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     debugImplementation("androidx.compose.ui:ui-tooling")

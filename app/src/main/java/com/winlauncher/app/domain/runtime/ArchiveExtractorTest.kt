@@ -1,6 +1,6 @@
 package com.winlauncher.app.domain.runtime
 
-import io.airlift.compress.zstd.ZstdOutputStream
+import com.github.luben.zstd.ZstdOutputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
 import org.junit.Assert.assertEquals
