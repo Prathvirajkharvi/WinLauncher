@@ -18,8 +18,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.winlauncher.app.data.db.entity.CpuBackend
 import com.winlauncher.app.data.db.entity.RuntimeProfile
+import com.winlauncher.app.domain.runtime.LaunchPreflight
 import com.winlauncher.app.domain.runtime.RuntimeComponent
 import com.winlauncher.app.domain.runtime.RuntimeComponentStatus
+import com.winlauncher.app.domain.runtime.RuntimeInstallationStatus
 import com.winlauncher.app.viewmodel.AppViewModelFactory
 import com.winlauncher.app.viewmodel.RuntimeInstallationViewModel
 import com.winlauncher.app.viewmodel.RuntimeViewModel
@@ -36,6 +38,9 @@ fun RuntimeManagerScreen(factory: AppViewModelFactory) {
 
     var showCreate by remember { mutableStateOf(false) }
     var pendingImportComponent by remember { mutableStateOf<RuntimeComponent?>(null) }
+    var pendingReplaceConfirm by remember { mutableStateOf<RuntimeComponentStatus?>(null) }
+    var pendingRemoveConfirm by remember { mutableStateOf<RuntimeComponentStatus?>(null) }
+    var replaceExisting by remember { mutableStateOf(false) }
 
     val pickImportFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val component = pendingImportComponent
@@ -48,8 +53,10 @@ fun RuntimeManagerScreen(factory: AppViewModelFactory) {
                 displayFileName = displayName,
                 versionLabel = null,
                 contentResolver = context.contentResolver,
+                replaceExisting = replaceExisting,
             )
         }
+        replaceExisting = false
     }
 
     Scaffold(
@@ -65,14 +72,6 @@ fun RuntimeManagerScreen(factory: AppViewModelFactory) {
                     "Runtime directory: ${installStatus.runtimeRootPath}",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                if (!installStatus.readyForLaunch) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "Wine and Box64 are required before a real launch will work.",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
                 importError?.let {
                     Spacer(Modifier.height(4.dp))
                     Text("Import failed: $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -83,9 +82,14 @@ fun RuntimeManagerScreen(factory: AppViewModelFactory) {
                 ComponentRow(
                     status = status,
                     onImport = {
-                        pendingImportComponent = status.component
-                        pickImportFile.launch(arrayOf("*/*"))
+                        if (status.installed) {
+                            pendingReplaceConfirm = status
+                        } else {
+                            pendingImportComponent = status.component
+                            pickImportFile.launch(arrayOf("*/*"))
+                        }
                     },
+                    onRemove = { pendingRemoveConfirm = status },
                 )
                 Spacer(Modifier.height(4.dp))
             }
@@ -97,7 +101,8 @@ fun RuntimeManagerScreen(factory: AppViewModelFactory) {
             }
             items(profiles, key = { it.id }) { profile ->
                 RuntimeCard(
-                    profile,
+                    profile = profile,
+                    installStatus = installStatus,
                     onClone = { viewModel.clone(profile) },
                     onDelete = { viewModel.delete(profile) },
                 )
@@ -115,6 +120,48 @@ fun RuntimeManagerScreen(factory: AppViewModelFactory) {
             },
         )
     }
+
+    pendingReplaceConfirm?.let { status ->
+        AlertDialog(
+            onDismissRequest = { pendingReplaceConfirm = null },
+            title = { Text("Replace ${status.component.displayName}?") },
+            text = {
+                Text(
+                    "This removes the currently installed version (${status.version}) and installs " +
+                        "the new package in its place. This can't be undone.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    replaceExisting = true
+                    pendingImportComponent = status.component
+                    pendingReplaceConfirm = null
+                    pickImportFile.launch(arrayOf("*/*"))
+                }) { Text("Replace") }
+            },
+            dismissButton = { TextButton(onClick = { pendingReplaceConfirm = null }) { Text("Cancel") } },
+        )
+    }
+
+    pendingRemoveConfirm?.let { status ->
+        AlertDialog(
+            onDismissRequest = { pendingRemoveConfirm = null },
+            title = { Text("Remove ${status.component.displayName}?") },
+            text = {
+                Text(
+                    "This deletes the installed version (${status.version}) from the app's runtime " +
+                        "directory. Stop any running game first -- this doesn't stop one for you.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    installViewModel.remove(status.component)
+                    pendingRemoveConfirm = null
+                }) { Text("Remove") }
+            },
+            dismissButton = { TextButton(onClick = { pendingRemoveConfirm = null }) { Text("Cancel") } },
+        )
+    }
 }
 
 private fun queryDisplayName(context: android.content.Context, uri: android.net.Uri): String? {
@@ -128,7 +175,7 @@ private fun queryDisplayName(context: android.content.Context, uri: android.net.
 }
 
 @Composable
-private fun ComponentRow(status: RuntimeComponentStatus, onImport: () -> Unit) {
+private fun ComponentRow(status: RuntimeComponentStatus, onImport: () -> Unit, onRemove: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.padding(12.dp).fillMaxWidth(),
@@ -141,6 +188,19 @@ private fun ComponentRow(status: RuntimeComponentStatus, onImport: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                     color = if (status.installed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                 )
+                if (status.installed && status.architecture != "n/a") {
+                    Text("Architecture: ${status.architecture}", style = MaterialTheme.typography.bodySmall)
+                }
+                if (status.guestLibraryCount > 0) {
+                    Text(
+                        "${status.guestLibraryCount} x86 guest librar${if (status.guestLibraryCount == 1) "y" else "ies"} bundled",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Text(status.path, style = MaterialTheme.typography.bodySmall)
+            }
+            if (status.installed) {
+                TextButton(onClick = onRemove) { Text("Remove") }
             }
             TextButton(onClick = onImport) { Text(if (status.installed) "Replace" else "Import") }
         }
@@ -148,12 +208,48 @@ private fun ComponentRow(status: RuntimeComponentStatus, onImport: () -> Unit) {
 }
 
 @Composable
-private fun RuntimeCard(profile: RuntimeProfile, onClone: () -> Unit, onDelete: () -> Unit) {
+private fun RuntimeCard(
+    profile: RuntimeProfile,
+    installStatus: RuntimeInstallationStatus,
+    onClone: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    // LaunchPreflight is the single source of truth for what this profile's backend needs --
+    // no separate "Wine + Box64" assumption here. NATIVE_ARM profiles correctly show ready
+    // once Wine alone is installed; BOX86 profiles correctly ask for Box86, not Box64.
+    val cpuBackend = remember(profile.cpuBackend) {
+        runCatching { CpuBackend.valueOf(profile.cpuBackend) }.getOrNull()
+    }
+
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp)) {
             Text(profile.name, style = MaterialTheme.typography.titleSmall)
             Text("CPU backend: ${profile.cpuBackend}", style = MaterialTheme.typography.bodySmall)
             Text("Prefix: ${profile.winePrefixRelativePath}", style = MaterialTheme.typography.bodySmall)
+
+            if (cpuBackend != null) {
+                val ready = LaunchPreflight.isLaunchable(installStatus, cpuBackend)
+                Spacer(Modifier.height(4.dp))
+                if (ready) {
+                    Text(
+                        "Ready to launch",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                } else {
+                    val missing = LaunchPreflight.missingComponents(
+                        installStatus,
+                        LaunchPreflight.requiredComponents(cpuBackend),
+                    )
+                    Text(
+                        "Cannot launch yet:\n" +
+                            missing.joinToString("\n") { "${it.displayName.substringBefore(" (")} is missing." },
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+
             Row(modifier = Modifier.padding(top = 8.dp)) {
                 TextButton(onClick = onClone) { Text("Clone") }
                 TextButton(onClick = onDelete) { Text("Delete") }

@@ -21,15 +21,22 @@ data class RuntimeComponentStatus(
     val installed: Boolean,
     val version: String,
     val path: String,
+    // "arm64-v8a" once a real ELF probe confirms it; "n/a" for DXVK/VKD3D (not executables).
+    val architecture: String = "n/a",
+    // Box64 packages commonly bundle x86/x86_64 guest libraries alongside the ARM64 binary --
+    // these stay associated with this same component/version rather than becoming a separate
+    // "component" of their own.
+    val guestLibraryCount: Int = 0,
 )
 
 data class RuntimeInstallationStatus(
     val components: List<RuntimeComponentStatus>,
     val runtimeRootPath: String,
 ) {
-    val wineReady: Boolean get() = components.any { it.component == RuntimeComponent.WINE && it.installed }
-    val box64Ready: Boolean get() = components.any { it.component == RuntimeComponent.BOX64 && it.installed }
-
-    /** The minimum needed to attempt a real launch: Wine + Box64. Box86/DXVK/VKD3D are optional. */
-    val readyForLaunch: Boolean get() = wineReady && box64Ready
+    // Deliberately no `readyForLaunch` here: which components are actually required
+    // depends on a runtime profile's CpuBackend (Wine+Box64, Wine+Box86, or Wine alone
+    // for NATIVE_ARM), which this type has no knowledge of. That decision belongs to
+    // LaunchPreflight, which takes a CpuBackend and this status together -- see
+    // LaunchPreflight.isLaunchable/report. A previous `readyForLaunch = wineReady &&
+    // box64Ready` here hardcoded the BOX64 case and misreported NATIVE_ARM/BOX86 profiles.
 }
