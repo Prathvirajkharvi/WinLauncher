@@ -103,8 +103,8 @@ dependencies {
     // Windows native binaries that do not load under Android's Bionic libc. See
     // ArchiveExtractor's doc for the full reasoning and the matching testImplementation
     // below (desktop-native plain jar, test-only, never packaged into the APK).
-    implementation("com.github.luben:zstd-jni:1.5.6-3@aar")
-    testImplementation("com.github.luben:zstd-jni:1.5.6-3")
+    implementation("com.github.luben:zstd-jni:1.5.5-4@aar")
+    testImplementation("com.github.luben:zstd-jni:1.5.5-4")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
