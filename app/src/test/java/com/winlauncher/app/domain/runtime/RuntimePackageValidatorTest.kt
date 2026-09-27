@@ -185,4 +185,40 @@ class RuntimePackageValidatorTest {
         assertEquals(1, findings.dllFiles.size)
         assertNull(RuntimePackageValidator.validate(RuntimeComponent.DXVK, findings))
     }
+
+    // --- component-specific architecture rule (Wine's x86_64 guest binaries vs Box64/Box86) ---
+
+    @Test
+    fun `box64 with only an x86_64 binary is still rejected, even though wine now accepts x86_64`() {
+        // Regression guard for the Wine-specific relaxation below: Box64/Box86 run DIRECTLY on
+        // the device CPU and must stay arm64-v8a-only. Only RuntimeComponent.WINE gets the
+        // host-vs-guest exception -- this must not have been weakened globally.
+        val dir = createTempDirectory().toFile()
+        writeElf(dir, "box64", machine = 62) // EM_X86_64 -- would run under itself, which is nonsense
+        val findings = RuntimePackageValidator.scan(dir)
+
+        val box64Error = RuntimePackageValidator.validate(RuntimeComponent.BOX64, findings)
+        assertNotNull(box64Error)
+        assertTrue(box64Error!!.contains("ARM64"))
+
+        val box86Error = RuntimePackageValidator.validate(RuntimeComponent.BOX86, findings)
+        assertNotNull(box86Error)
+        assertTrue(box86Error!!.contains("ARM64"))
+    }
+
+    @Test
+    fun `wine with only an x86_64 binary is accepted, unlike box64 with the same finding`() {
+        val dir = createTempDirectory().toFile()
+        writeElf(dir, "wine64", machine = 62) // EM_X86_64 -- Box64-translated, this is the normal case
+        val findings = RuntimePackageValidator.scan(dir)
+        assertNull(RuntimePackageValidator.validate(RuntimeComponent.WINE, findings))
+    }
+
+    @Test
+    fun `wine with a genuine arm64-native binary is still accepted too`() {
+        val dir = createTempDirectory().toFile()
+        writeElf(dir, "wine64", machine = 183) // EM_AARCH64 -- CpuBackend.NATIVE_ARM case
+        val findings = RuntimePackageValidator.scan(dir)
+        assertNull(RuntimePackageValidator.validate(RuntimeComponent.WINE, findings))
+    }
 }

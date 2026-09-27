@@ -86,7 +86,20 @@ object RuntimePackageValidator {
             return "Archive contains no files."
         }
         if (component.isExecutable) {
-            if (findings.armExecutables.isEmpty()) {
+            // Box64/Box86 run DIRECTLY on the device CPU and must therefore be real
+            // arm64-v8a executables -- that rule stays exactly as strict as before for
+            // them. Wine is different: in a real Winlator-style setup, Wine's OWN
+            // wine/wine64/wineserver binaries are commonly x86_64 (or x86) Linux ELFs
+            // that Box64 translates at runtime, not arm64-v8a builds -- an Android host
+            // ABI of arm64-v8a says nothing about what architecture the Wine GUEST
+            // binaries were built for. Requiring arm64-v8a here would reject every
+            // real-world x86_64 Wine build. See WineWcpValidator's doc for the same
+            // host-vs-guest distinction applied specifically to .wcp imports.
+            val acceptsX86Guest = component == RuntimeComponent.WINE
+            val hasUsableExecutable = findings.armExecutables.isNotEmpty() ||
+                (acceptsX86Guest && findings.x86Guests.isNotEmpty())
+
+            if (!hasUsableExecutable) {
                 return when {
                     findings.x86Guests.isNotEmpty() ->
                         "No ARM64 (AArch64) binary found for ${component.displayName} -- only x86/x86_64 " +

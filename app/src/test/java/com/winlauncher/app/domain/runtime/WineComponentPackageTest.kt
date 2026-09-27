@@ -113,6 +113,42 @@ class WineComponentPackageTest {
     }
 
     @Test
+    fun `wine wcp containing x86_64 wine64 and wineserver, run under Box64, is accepted`() {
+        // The real-world case this fixes: a Winlator-style Wine build whose own
+        // wine64/wineserver binaries are x86_64 Linux ELFs, translated to ARM64 by Box64 at
+        // runtime -- NOT an arm64-v8a-native build. The Android host ABI (arm64-v8a) and the
+        // Wine guest binary's architecture are different things; this must still be accepted.
+        val dir = tmp.newFolder("valid-wine-wcp-x86_64")
+        extractWcp(
+            mapOf(
+                "profile.json" to """{"category":"wine","name":"Wine 10.0-rc2 (x86_64, Box64)"}""".toByteArray(),
+                "wine-10.0-rc2/bin/wine64" to elfBytes(62), // EM_X86_64
+                "wine-10.0-rc2/bin/wineserver" to elfBytes(62), // EM_X86_64
+            ),
+            dir,
+        )
+
+        assertNull(WineWcpValidator.validate(dir))
+        assertEquals(2, WineWcpValidator.locateWineBinaries(dir).size)
+    }
+
+    @Test
+    fun `wine wcp containing a 32-bit x86 wine binary alongside x86_64 wine64 is accepted`() {
+        val dir = tmp.newFolder("valid-wine-wcp-x86-and-x86_64")
+        extractWcp(
+            mapOf(
+                "profile.json" to """{"category":"wine"}""".toByteArray(),
+                "bin/wine" to elfBytes(3), // EM_386 -- 32-bit wine
+                "bin/wine64" to elfBytes(62), // EM_X86_64 -- 64-bit wine64
+            ),
+            dir,
+        )
+
+        assertNull(WineWcpValidator.validate(dir))
+        assertEquals(2, WineWcpValidator.locateWineBinaries(dir).size)
+    }
+
+    @Test
     fun `valid wine wcp compressed with xz instead of zstd is accepted the same way`() {
         // Real Winlator .wcp packages (e.g. wine-10.0-rc2-phat.wcp) have shipped XZ-compressed
         // rather than zstd-compressed -- extraction must detect that from magic bytes (see
@@ -341,5 +377,54 @@ class WineComponentPackageTest {
 
         assertTrue(result.isFailure)
         assertFalse(manager.status().components.first { it.component == RuntimeComponent.WINE }.installed)
+    }
+
+    // --- 8. end-to-end install of an x86_64-only Wine build (Box64-translated) --------
+
+    @Test
+    fun `an x86_64-only wine wcp is reported as installed with the correct architecture after commit`() {
+        // Guards RuntimeInstallationManager.binaryFile()'s fallback search specifically:
+        // WineWcpValidator/RuntimePackageValidator accepting x86_64 is not enough on its own
+        // if componentStatus() then can't find that same binary and reports "not installed",
+        // or if wine64/wineserver never actually get the executable bit set.
+        val runtimeRoot = createTempDirectory().toFile()
+        val manager = RuntimeInstallationManager(runtimeRoot)
+
+        val staging = tmp.newFolder("x86_64-wine-staging")
+        extractWcp(
+            mapOf(
+                "profile.json" to """{"category":"wine","name":"Wine 10.0-rc2 (x86_64, Box64)"}""".toByteArray(),
+                "wine-10.0-rc2/bin/wine64" to elfBytes(62), // EM_X86_64
+                "wine-10.0-rc2/bin/wineserver" to elfBytes(62), // EM_X86_64
+            ),
+            staging,
+        )
+
+        val result = manager.commitStagedImport(
+            component = RuntimeComponent.WINE,
+            staging = staging,
+            archiveEntryNames = listOf(
+                "profile.json",
+                "wine-10.0-rc2/bin/wine64",
+                "wine-10.0-rc2/bin/wineserver",
+            ),
+            archiveKind = ArchiveKind.WCP,
+            versionLabel = "10.0-rc2",
+            replaceExisting = false,
+        )
+
+        assertTrue(result.isSuccess)
+        val status = manager.status().components.first { it.component == RuntimeComponent.WINE }
+        assertTrue(status.installed)
+        assertEquals("x86_64", status.architecture)
+        assertNotNull(manager.binaryFile(RuntimeComponent.WINE))
+
+        val wineDir = manager.componentDir(RuntimeComponent.WINE)
+        val wine64 = File(wineDir, "wine-10.0-rc2/bin/wine64")
+        val wineserver = File(wineDir, "wine-10.0-rc2/bin/wineserver")
+        assertTrue("wine64 must exist after commit", wine64.isFile)
+        assertTrue("wineserver must exist after commit", wineserver.isFile)
+        assertTrue("wine64 must be marked executable after commit", wine64.canExecute())
+        assertTrue("wineserver must be marked executable after commit", wineserver.canExecute())
     }
 }

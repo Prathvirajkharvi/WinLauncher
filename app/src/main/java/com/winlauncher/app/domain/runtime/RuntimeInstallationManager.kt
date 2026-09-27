@@ -51,13 +51,23 @@ class RuntimeInstallationManager internal constructor(runtimeRootOverride: File)
         require(component.isExecutable) { "${component.displayName} is not an executable component" }
         val dir = componentDir(component)
         // Import places the canonical binary at <dir>/<folderName> (see importComponent);
-        // for extracted archives, fall back to a search for an ARM64-executable file, then
-        // to a shallow search for a matching file name.
+        // for extracted archives, fall back to a search for a matching-architecture file,
+        // then to a shallow search for a matching file name.
         val canonical = File(dir, component.folderName)
         if (canonical.isFile) return canonical
-        val armMatch = dir.walkTopDown().maxDepth(4)
-            .firstOrNull { it.isFile && ElfInspector.detect(it) == ElfInspector.Arch.ARM64 }
-        if (armMatch != null) return armMatch
+        // Box64/Box86 run DIRECTLY on the device CPU and so must be found as a real
+        // arm64-v8a binary. Wine's own binaries are commonly x86_64 (or x86) Linux ELFs
+        // that Box64 translates at runtime instead -- see RuntimePackageValidator.
+        // validate's doc for the same host-vs-guest distinction -- so only Wine's
+        // fallback search also accepts those architectures.
+        val acceptedArches = if (component == RuntimeComponent.WINE) {
+            setOf(ElfInspector.Arch.ARM64, ElfInspector.Arch.ARM32, ElfInspector.Arch.X86, ElfInspector.Arch.X86_64)
+        } else {
+            setOf(ElfInspector.Arch.ARM64)
+        }
+        val archMatch = dir.walkTopDown().maxDepth(4)
+            .firstOrNull { it.isFile && ElfInspector.detect(it) in acceptedArches }
+        if (archMatch != null) return archMatch
         return dir.walkTopDown().maxDepth(3).firstOrNull { it.isFile && it.name == component.folderName }
     }
 
@@ -226,13 +236,23 @@ class RuntimeInstallationManager internal constructor(runtimeRootOverride: File)
             }
 
             if (component.isExecutable) {
-                findings.armExecutables.forEach { it.setExecutable(true, false) }
+                // Wine's own binaries commonly run as x86_64 (or x86) Linux ELFs translated by
+                // Box64 at runtime -- see RuntimePackageValidator.validate's doc for why an
+                // arm64-v8a-only rule would be wrong here specifically. They still need the
+                // executable bit and still deserve the same single-binary canonical-rename
+                // convenience as an arm64-v8a build gets.
+                val ownExecutables = if (component == RuntimeComponent.WINE) {
+                    findings.armExecutables + findings.x86Guests
+                } else {
+                    findings.armExecutables
+                }
+                ownExecutables.forEach { it.setExecutable(true, false) }
                 // Only safe to pick a canonical entry point automatically when the package has
-                // exactly one top-level ARM64 binary (e.g. a bare `box64` file). A multi-binary
-                // tree (a full Wine build with wine/wine64/wineserver/...) is left as-is for
+                // exactly one top-level binary (e.g. a bare `box64` file). A multi-binary tree
+                // (a full Wine build with wine/wine64/wineserver/...) is left as-is for
                 // binaryFile()'s own resolution at launch time -- guessing wrong here would
                 // silently point every launch at the wrong executable.
-                val onlyCandidate = findings.armExecutables.singleOrNull()
+                val onlyCandidate = ownExecutables.singleOrNull()
                 if (onlyCandidate != null && onlyCandidate.parentFile == staging &&
                     onlyCandidate.name != component.folderName
                 ) {
