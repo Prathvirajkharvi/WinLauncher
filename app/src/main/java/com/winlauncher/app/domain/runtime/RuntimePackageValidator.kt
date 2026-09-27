@@ -60,18 +60,31 @@ object RuntimePackageValidator {
         RuntimeComponent.VKD3D to listOf("d3d12", "d3d12core"),
     )
 
-    /** Cheap guess of a package's component type from entry names alone, used to catch obvious mismatches. */
+    /**
+     * Cheap guess of a package's component type from entry names alone, used to catch obvious
+     * mismatches. Wine is checked BEFORE VKD3D/DXVK: a real, complete Wine build legitimately
+     * bundles its own built-in Direct3D DLL implementations (Wine's "fake DLL" overrides, e.g.
+     * lib/wine/x86_64-windows/d3d9.dll, d3d11.dll, dxgi.dll -- and, on newer builds, a vendored
+     * libvkd3d for its Direct3D 12 support) under its own lib/ tree, using the exact same file/
+     * library name substrings ("d3d9", "d3d11", "dxgi", even "vkd3d" itself) that VKD3D-Proton
+     * and DXVK ship as their OWN top-level payload. A real Wine entry-point binary name
+     * (wine/wine64/wineserver/...) is a far more specific, unambiguous signal than a DLL or
+     * shared-library name substring living somewhere inside that same tree, so it must win the
+     * guess rather than lose to it -- see the regression coverage in
+     * RuntimePackageValidatorTest ("a full wine build bundling its own built-in d3d/dxgi dlls
+     * is still guessed as wine, not dxvk").
+     */
     fun guessComponentType(entryNames: List<String>): RuntimeComponent? {
         val lower = entryNames.map { it.lowercase() }
         return when {
             lower.any { it.contains("box64") } -> RuntimeComponent.BOX64
             lower.any { it.contains("box86") } -> RuntimeComponent.BOX86
+            lower.any { it == "wine" || it.endsWith("/wine") || it.contains("wineserver") || it.contains("wine64") } ->
+                RuntimeComponent.WINE
             lower.any { it.contains("vkd3d") } -> RuntimeComponent.VKD3D
             lower.any {
                 it.endsWith(".dll") && listOf("d3d9", "d3d10", "d3d11", "dxgi").any(it::contains)
             } -> RuntimeComponent.DXVK
-            lower.any { it == "wine" || it.endsWith("/wine") || it.contains("wineserver") || it.contains("wine64") } ->
-                RuntimeComponent.WINE
             else -> null
         }
     }

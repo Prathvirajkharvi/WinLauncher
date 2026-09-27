@@ -206,26 +206,46 @@ class RuntimeInstallationManager internal constructor(runtimeRootOverride: File)
             // scan below: a .wcp merely claiming Wine (via profile.json) or happening to contain
             // *some* arm64 binary is not enough -- see WineWcpValidator's doc for why
             // profile.json alone is never trusted either.
+            //
+            // wcpConfirmedWine tracks whether THIS specific, more specific check already made
+            // the authoritative call. When it has, the generic name-guess below is skipped
+            // entirely for this import -- profile.json declaring {"type": "Wine", ...} plus a
+            // real Wine binary actually found (directly required by WineWcpValidator.validate)
+            // must take priority and is not re-litigated by a cheap substring guess. That guess
+            // has no concept of the fact that a real, complete Wine build legitimately bundles
+            // its OWN built-in Direct3D DLL implementations (Wine's "fake DLL" overrides, e.g.
+            // lib/wine/x86_64-windows/d3d9.dll, d3d11.dll, dxgi.dll, plus a vendored libvkd3d on
+            // newer builds) -- those are not a DXVK/VKD3D-Proton drop-in and must never be
+            // treated as one just because their file/library names contain the same substrings.
+            // See WineComponentPackageTest's "a wine-10.0-rc2-phat style wcp is recognized as
+            // Wine end-to-end and is never rejected as DXVK" regression case.
+            var wcpConfirmedWine = false
             if (archiveKind == ArchiveKind.WCP && component == RuntimeComponent.WINE) {
                 val wcpError = WineWcpValidator.validate(staging)
                 if (wcpError != null) {
                     staging.deleteRecursively()
                     return Result.failure(IllegalStateException(wcpError))
                 }
+                wcpConfirmedWine = true
             }
 
             // Component-type sanity check from file/entry names. This only catches confident,
             // unambiguous mismatches (guessComponentType returns null for anything it isn't sure
             // about) -- the ELF/DLL scan below is the authoritative gate that runs regardless.
-            val guessed = RuntimePackageValidator.guessComponentType(archiveEntryNames)
-            if (guessed != null && guessed != component) {
-                staging.deleteRecursively()
-                return Result.failure(
-                    IllegalStateException(
-                        "This looks like a ${guessed.displayName} package, not ${component.displayName}. " +
-                            "Pick the correct component before importing, or use the right file.",
-                    ),
-                )
+            // Skipped when wcpConfirmedWine is true (see the comment above): re-running it there
+            // would let a full Wine build's own bundled DLLs override a decision profile.json
+            // and a real Wine binary already settled.
+            if (!wcpConfirmedWine) {
+                val guessed = RuntimePackageValidator.guessComponentType(archiveEntryNames)
+                if (guessed != null && guessed != component) {
+                    staging.deleteRecursively()
+                    return Result.failure(
+                        IllegalStateException(
+                            "This looks like a ${guessed.displayName} package, not ${component.displayName}. " +
+                                "Pick the correct component before importing, or use the right file.",
+                        ),
+                    )
+                }
             }
 
             val findings = RuntimePackageValidator.scan(staging)

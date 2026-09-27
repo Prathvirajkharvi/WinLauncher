@@ -54,6 +54,41 @@ class RuntimePackageValidatorTest {
         assertNull(RuntimePackageValidator.guessComponentType(listOf("readme.txt", "license.md")))
     }
 
+    @Test
+    fun `a full wine build bundling its own built-in d3d and dxgi dlls is still guessed as wine, not dxvk`() {
+        // Regression for the real-world "wine-10.0-rc2-phat.wcp misclassified as DXVK" report:
+        // a genuine, complete Wine build's lib/ tree legitimately ships its OWN built-in
+        // Direct3D DLL overrides (Wine's "fake DLL" implementations) using the exact same file
+        // name substrings DXVK's real release ships as its own top-level payload. The real Wine
+        // binary name (bin/wine64) must win the guess, not lose to the DLL name match.
+        val entries = listOf(
+            "profile.json",
+            "bin/wine64",
+            "bin/wineserver",
+            "lib/wine/x86_64-windows/d3d9.dll",
+            "lib/wine/x86_64-windows/d3d10.dll",
+            "lib/wine/x86_64-windows/d3d11.dll",
+            "lib/wine/x86_64-windows/dxgi.dll",
+            "share/wine/wine.desktop",
+            "prefixPack.txz",
+        )
+        assertEquals(RuntimeComponent.WINE, RuntimePackageValidator.guessComponentType(entries))
+    }
+
+    @Test
+    fun `a full wine build vendoring its own libvkd3d is still guessed as wine, not vkd3d`() {
+        val entries = listOf("bin/wine64", "lib/wine/x86_64-unix/libvkd3d-1.so")
+        assertEquals(RuntimeComponent.WINE, RuntimePackageValidator.guessComponentType(entries))
+    }
+
+    @Test
+    fun `a genuine dxvk package with no wine binary present is still guessed as dxvk`() {
+        // The reordering above must not weaken real DXVK detection -- only a package that
+        // ALSO contains an actual wine binary name should ever prefer WINE over DXVK/VKD3D.
+        val entries = listOf("x64/d3d11.dll", "x64/dxgi.dll", "x32/d3d9.dll")
+        assertEquals(RuntimeComponent.DXVK, RuntimePackageValidator.guessComponentType(entries))
+    }
+
     // --- scan + validate ---
 
     @Test

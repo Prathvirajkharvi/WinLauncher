@@ -427,4 +427,81 @@ class WineComponentPackageTest {
         assertTrue("wine64 must be marked executable after commit", wine64.canExecute())
         assertTrue("wineserver must be marked executable after commit", wineserver.canExecute())
     }
+
+    // --- 9. real-world regression: wine-10.0-rc2-phat.wcp misclassified as DXVK -----------
+
+    /**
+     * The exact profile.json structure reported: a real wine-10.0-rc2-phat.wcp declares
+     * {"type": "Wine", ...} plus a nested "wine" manifest naming its own binPath/libPath/
+     * prefixPack, and its extracted tree is bin/ + lib/ + share/ + prefixPack.txz +
+     * profile.json. lib/ legitimately bundles Wine's own built-in Direct3D DLL overrides
+     * (d3d9/d3d10/d3d11/dxgi under lib/wine/x86_64-windows/) -- which the OLD generic
+     * component-type guess in RuntimeInstallationManager mistook for a DXVK drop-in and
+     * rejected with "This looks like a DXVK package, not Wine," even though profile.json
+     * unambiguously said Wine and a real wine64/wineserver binary was present under bin/.
+     */
+    private val phatWineProfileJson =
+        """{"type":"Wine","versionName":"10.0-rc2","wine":{"binPath":"bin","libPath":"lib","prefixPack":"prefixPack.txz"}}"""
+
+    private val phatWineEntries: Map<String, ByteArray> = mapOf(
+        "profile.json" to phatWineProfileJson.toByteArray(),
+        "bin/wine64" to elfBytes(62), // EM_X86_64 -- Box64-translated, the normal real-world case
+        "bin/wineserver" to elfBytes(62),
+        "lib/wine/x86_64-windows/d3d9.dll" to "fake-dll".toByteArray(),
+        "lib/wine/x86_64-windows/d3d10.dll" to "fake-dll".toByteArray(),
+        "lib/wine/x86_64-windows/d3d11.dll" to "fake-dll".toByteArray(),
+        "lib/wine/x86_64-windows/dxgi.dll" to "fake-dll".toByteArray(),
+        "share/wine/wine.desktop" to "placeholder".toByteArray(),
+        // Opaque to the extractor -- a nested compressed tar that is never itself unpacked
+        // here, exactly like a real .wcp's prefixPack.txz payload.
+        "prefixPack.txz" to "opaque-nested-archive-not-further-extracted".toByteArray(),
+    )
+
+    @Test
+    fun `profile json wine manifest binPath libPath and prefixPack are parsed`() {
+        val dir = tmp.newFolder("phat-wine-profile-fields")
+        extractXzWcp(phatWineEntries, dir)
+
+        val profile = WcpProfileReader.read(dir)
+        assertNotNull(profile)
+        assertEquals("Wine", profile!!.category)
+        assertEquals("bin", profile.wineBinPath)
+        assertEquals("lib", profile.wineLibPath)
+        assertEquals("prefixPack.txz", profile.winePrefixPack)
+    }
+
+    @Test
+    fun `a wine-10 0-rc2-phat style wcp bundling its own d3d and dxgi dlls passes WineWcpValidator`() {
+        val dir = tmp.newFolder("phat-wine-wcp-validator")
+        extractXzWcp(phatWineEntries, dir)
+
+        assertNull(WineWcpValidator.validate(dir))
+        assertEquals(2, WineWcpValidator.locateWineBinaries(dir, WcpProfileReader.read(dir)).size)
+    }
+
+    @Test
+    fun `a wine-10 0-rc2-phat style wcp is recognized as Wine end-to-end and is never rejected as DXVK`() {
+        val staging = tmp.newFolder("phat-wine-wcp-e2e")
+        extractXzWcp(phatWineEntries, staging)
+
+        val runtimeRoot = createTempDirectory().toFile()
+        val manager = RuntimeInstallationManager(runtimeRoot)
+        val result = manager.commitStagedImport(
+            component = RuntimeComponent.WINE,
+            staging = staging,
+            archiveEntryNames = phatWineEntries.keys.toList(),
+            archiveKind = ArchiveKind.WCP,
+            versionLabel = "10.0-rc2",
+            replaceExisting = false,
+        )
+
+        assertTrue(
+            "a genuine Wine .wcp bundling its own d3d/dxgi dlls must be accepted, not " +
+                "rejected as DXVK: ${result.exceptionOrNull()?.message}",
+            result.isSuccess,
+        )
+        val status = manager.status().components.first { it.component == RuntimeComponent.WINE }
+        assertTrue(status.installed)
+        assertEquals("x86_64", status.architecture)
+    }
 }
