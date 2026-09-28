@@ -64,26 +64,41 @@ separate upstream engineering effort (see the architecture doc's
 build-vs-integrate breakdown); this project integrates them, it doesn't
 compile them.
 
-**2. Android 10+ (API 29+) blocks executing binaries written to app
-storage at runtime.** This is the single biggest real risk to the whole
-"import your own runtime" feature (requirement 15). Android enforces W^X
-(write XOR execute) on a non-rooted device: a binary an app downloads or
-copies into its own private storage at runtime generally **cannot** be
-`exec()`'d, even after `chmod +x`. `RuntimeInstallationManager`'s import
-mechanism is real and useful for staging binaries and for DXVK/VKD3D
-(which are DLLs Wine loads, not binaries Android execs -- no restriction
-there), but actually running an imported Wine/Box64 **executable** will
-likely fail on modern devices with a SecurityException/"Permission
-denied," which `RealRuntimeEngine.launch()` catches and surfaces as a
-clear error rather than crashing.
+**2. Android 10+ (API 29+) exec restriction: now worked around, not
+verified on a device.** Android enforces W^X (write XOR execute) on a
+non-rooted device: a binary an app downloads or copies into its own
+private storage at runtime cannot be `exec()`'d directly, even after
+`chmod +x` -- this used to make an imported Box64/Wine binary fail with
+`error=13, Permission denied` the moment `RealRuntimeEngine` tried to
+launch it. `RuntimeInstallationManager`'s import mechanism was never the
+problem; only launching the imported **executable** was.
 
-The standard real-world fix (used by Winlator and similar projects) is to
-ship Wine/Box64 as `.so` files under `app/src/main/jniLibs/arm64-v8a/`
-**at APK build time** (e.g. `libwine.so`, `libbox64.so`) -- Android's
-PackageManager extracts these into `ApplicationInfo.nativeLibraryDir`,
-which is exec-permitted. That's a build-time packaging change (new
-binaries checked into the repo or fetched during CI), not something a
-runtime SAF import can achieve. This project does not yet do that.
+The fix (`NativeProcessLauncher` + `app/src/main/cpp/exec/native_exec.c`):
+a small native loader stages the imported ELF into an anonymous
+`memfd_create()`-backed file descriptor (no `app_data_file` path for
+SELinux's policy to key off) and execs *that fd* via `execveat(fd, "",
+argv, envp, AT_EMPTY_PATH)` (what `fexecve()` does under the hood) --
+below API 29 this restriction doesn't exist yet, so the real on-disk path
+is exec'd directly instead. Only the ONE top-level ARM64 process a
+profile needs (Box64, or Wine directly for a `NATIVE_ARM` backend) goes
+through this path -- everything it subsequently loads (the x86_64 Wine
+build, the Windows `.exe`) is read as data and JIT-translated by
+Box64/Wine into memory they allocate themselves, never asking the OS to
+exec an on-disk file, so it needs no special handling. Unlike the
+`jniLibs`-at-build-time approach some similar projects use, this keeps
+"import any Wine/Box64 build the user picks, at runtime, via SAF" fully
+intact -- jniLibs are baked into the signed APK and can't be added to
+post install.
+
+This mechanism was verified against AOSP bionic's own sources (not
+assumed from glibc) -- see the header comment in `native_exec.c` for the
+exact API-level facts and syscall numbers, with citations. What is
+**not** verified is that it behaves this way on an actual device: no NDK
+toolchain or Android device/emulator was available in the sandbox this
+was implemented in, so this compiled successfully only via a host-side
+(non-Android) C syntax check, and needs (a) a real NDK/CMake build --
+first checked by CI -- and (b) `./gradlew connectedDebugAndroidTest` or a
+manual run confirming `error=13` is actually gone on a real device.
 
 **3. The Wine+Box64 invocation itself is unverified and fork-specific.**
 There's no single universal "run this PE binary" command across
@@ -92,12 +107,12 @@ Wine-Android forks -- see the comment on `buildLaunchCommand`.
 **Bottom line:** this delivers the integration layer end to end
 (discovery -> verification -> staging -> launch -> monitor -> logs -> DXVK/
 VKD3D deployment), wired through the exact same `RuntimeEngine` interface
-DummyRuntimeEngine already used. Getting an actual Windows game running
-requires (a) real Wine-Android + Box64 binaries, (b) packaging them via
-jniLibs at build time rather than runtime import, and (c) confirming the
-exact invocation against whichever fork is used -- none of which can be
-verified without real binaries and a real device, neither of which are
-available in this sandbox.
+DummyRuntimeEngine already used, and the Android-10+ exec restriction that
+used to block launching entirely now has a real, targeted fix. Getting an
+actual Windows game running still requires (a) real Wine-Android + Box64
+binaries and (b) confirming the exact invocation against whichever fork is
+used -- neither of which can be verified without real binaries and a real
+device, neither of which are available in this sandbox.
 
 ---
 

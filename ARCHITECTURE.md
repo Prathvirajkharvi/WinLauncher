@@ -172,6 +172,16 @@ docs/
  ARCHITECTURE.md
 ```
 
+> This diagram is the original design-time plan and predates the actual
+> implementation in several places (e.g. GPU detection lives at
+> `app/src/main/cpp/gpu/`, not `native/gpu/`). One specific gap it left open
+> is now closed: `process_launcher.cpp` above was never built, and
+> `domain/process/ProcessLauncher.kt`'s plain `ProcessBuilder` stood in for
+> it -- which cannot exec a binary imported into app storage on Android 10+
+> (see README "Known limitations #2"). That native layer now exists as
+> `app/src/main/cpp/exec/native_exec.c`, paired with
+> `domain/process/NativeProcessLauncher.kt`.
+
 ## 8. Android Permissions
 
 - `INTERNET` — only if a compatibility-DB sync feature is added (optional, off by default)

@@ -11,8 +11,9 @@ import com.winlauncher.app.domain.graphics.GpuDetector
 import com.winlauncher.app.domain.graphics.GraphicsBackendPreference
 import com.winlauncher.app.domain.graphics.GraphicsManager
 import com.winlauncher.app.domain.graphics.GraphicsResolution
-import com.winlauncher.app.domain.process.ProcessLauncher
-import com.winlauncher.app.domain.process.ProcessMonitor
+import com.winlauncher.app.domain.process.ManagedProcess
+import com.winlauncher.app.domain.process.NativeExecException
+import com.winlauncher.app.domain.process.NativeProcessLauncher
 import com.winlauncher.app.domain.process.ProcessState
 import java.io.File
 import java.io.FileOutputStream
@@ -23,24 +24,30 @@ import java.io.FileOutputStream
  * WHAT'S REAL HERE: binary/prefix verification, SAF-to-local-file staging
  * (Wine/Box64 are native Linux processes and can't resolve `content://` URIs),
  * Mali-aware DXVK/VKD3D deployment (reusing GpuDetector/GraphicsManager
- * completely unchanged), environment construction, and process supervision via
- * the same ProcessLauncher/ProcessMonitor DummyRuntimeEngine uses -- genuine
- * stdout/stderr/exit-code capture, not simulated.
+ * completely unchanged), environment construction, and process supervision --
+ * genuine stdout/stderr/exit-code capture, not simulated. Unlike
+ * DummyRuntimeEngine, launching goes through [NativeProcessLauncher], not
+ * plain `ProcessBuilder`: Android 10+ (API 29+) denies executing a binary an
+ * app wrote to its own private storage at runtime (exactly what
+ * RuntimeInstallationManager's SAF import produces), so a real Box64/Wine
+ * import needs the memfd_create+execveat workaround that class implements --
+ * see its and native_exec.c's docs for the full mechanism and what was
+ * verified against Android/bionic specifically before writing it.
  *
  * WHAT'S NOT VERIFIED: the exact Wine+Box64 command line is fork-specific (see
- * buildLaunchCommand) and has not been exercised against real binaries in this
- * environment -- there are none here to test with. A "Running" status means
- * the configured OS process was started, not that a Windows game is actually
- * working. See README "Known limitations", including the Android 10+ W^X
- * exec restriction that affects binaries imported at runtime.
+ * buildLaunchCommand) and neither it nor the native exec path itself has been
+ * exercised against real binaries on a real device -- there is neither here
+ * to test with. A "Running" status means the configured OS process was
+ * started, not that a Windows game is actually working. See README "Known
+ * limitations".
  */
 class RealRuntimeEngine(
     private val context: Context,
     private val installationManager: RuntimeInstallationManager,
 ) : RuntimeEngine, LogSource {
 
-    private val launcher = ProcessLauncher()
-    private var monitor: ProcessMonitor? = null
+    private val launcher = NativeProcessLauncher()
+    private var monitor: ManagedProcess? = null
     private var status: RuntimeStatus = RuntimeStatus.Idle
 
     override suspend fun initialize(runtimeProfile: RuntimeProfile): ValidationResult {
@@ -95,24 +102,34 @@ class RealRuntimeEngine(
             val env = buildEnvironment(game, runtimeProfile, prefixDir, resolution)
             val command = buildLaunchCommand(box64Bin, wineBin, localExe, game.launchArguments)
 
+            // command[0] is the one thing that actually needs a new OS process
+            // (Box64, or Wine directly for NATIVE_ARM) -- everything else in
+            // `command` is just data/arguments handed to it. See
+            // NativeProcessLauncher's and native_exec.c's docs for why only
+            // that first element needs special handling.
             val newMonitor = launcher.launch(
-                command = command,
-                workingDirectory = localExe.parentFile,
+                elfPath = command[0],
+                argv = command,
                 environment = env,
+                workingDirectory = localExe.parentFile ?: context.filesDir,
             )
             monitor = newMonitor
             status = RuntimeStatus.Running
             status
-        } catch (e: SecurityException) {
-            // The most likely real-world failure on Android 10+: W^X blocks exec
-            // of a binary written to app storage at runtime (see class doc).
-            failed(
-                AppError.ProcessLaunchFailed(
-                    "Exec was blocked by the OS (${e.message}). On Android 10+, binaries " +
-                        "imported at runtime generally can't be executed -- they need to ship " +
-                        "in the APK's jniLibs at build time. See README.",
-                ),
-            )
+        } catch (e: NativeExecException) {
+            // The native loader already tried the Android 10+ W^X workaround
+            // (memfd_create+execveat -- see native_exec.c) before this was
+            // thrown, so a permission-denied here means something more
+            // unusual than the everyday case that workaround exists for.
+            val looksLikePermissionDenied = e.message?.contains("errno=13") == true ||
+                e.message?.contains("EACCES", ignoreCase = true) == true
+            val hint = if (looksLikePermissionDenied) {
+                " This device's SELinux policy may be non-standard -- the usual Android 10+ " +
+                    "app-storage exec restriction is already worked around for this launch."
+            } else {
+                ""
+            }
+            failed(AppError.ProcessLaunchFailed("${e.message}.$hint"))
         } catch (e: Exception) {
             failed(AppError.ProcessLaunchFailed(e.message ?: "unknown error"))
         }
